@@ -1,0 +1,705 @@
+<meta charset="utf-8">
+<title>NYC Lakehouse Flow</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: control bar -> full-width pipeline diagram -> two-column (step/inspector | console) -> volume strip.
+   Medallion metals (bronze/silver/gold) are the layer colors; blue is reserved for "data is flowing here now". */
+:root {
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --sunken: #e9edf2;
+  --ink: #1a2130;
+  --muted: #5b6575;
+  --line: #cfd5de;
+  --accent: #2c59d0;
+  --accent-soft: #e3eaff;
+  --bronze: #9a5a2a;
+  --silver: #66717f;
+  --gold: #9a7310;
+  --ok: #23804a;
+  --bad: #c2382a;
+  --warn: #a8670b;
+  --console-bg: #121823;
+  --console-fg: #d3dbe7;
+  --console-dim: #7d899b;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f131a; --surface: #171d27; --sunken: #121720; --ink: #e5e9f0; --muted: #98a2b2; --line: #2b3341;
+    --accent: #7d9dff; --accent-soft: #1d2846; --bronze: #d38b56; --silver: #a9b3c1; --gold: #e1b440;
+    --ok: #5cc98a; --bad: #ff7b6c; --warn: #f0b04f; --console-bg: #0a0d13; --console-fg: #d3dbe7; --console-dim: #6f7b8d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f131a; --surface: #171d27; --sunken: #121720; --ink: #e5e9f0; --muted: #98a2b2; --line: #2b3341;
+  --accent: #7d9dff; --accent-soft: #1d2846; --bronze: #d38b56; --silver: #a9b3c1; --gold: #e1b440;
+  --ok: #5cc98a; --bad: #ff7b6c; --warn: #f0b04f; --console-bg: #0a0d13; --console-fg: #d3dbe7; --console-dim: #6f7b8d;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font: 15px/1.55 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 48px;
+}
+.wrap { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(1.6rem, 3.2vw, 2.2rem); font-weight: 800; letter-spacing: -0.01em; }
+.lede { color: var(--muted); max-width: 70ch; margin: 6px 0 0; }
+.lede code, p code, li code { font-family: var(--mono); font-size: 0.88em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; }
+.eyebrow { font: 600 11px/1 var(--body); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+
+/* control bar */
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex-wrap: wrap; }
+.seg button { border: 0; background: transparent; color: var(--muted); font: 500 13px var(--body); padding: 7px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.transport { display: inline-flex; gap: 6px; }
+.btn { border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: 600 13px var(--body); padding: 7px 12px; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); min-width: 84px; justify-content: center; }
+.btn:disabled { opacity: 0.4; cursor: default; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.progress { flex: 1 1 200px; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.bar { flex: 1; height: 6px; background: var(--sunken); border-radius: 3px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+.counter { font: 500 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* diagram */
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
+.diagram svg { display: block; width: 100%; min-width: 980px; height: auto; }
+.hint { font-size: 12px; color: var(--muted); padding: 0 14px 10px; }
+.colhead { font: 700 11px var(--body); letter-spacing: .12em; fill: var(--muted); }
+.colhead.bronze { fill: var(--bronze); } .colhead.silver { fill: var(--silver); } .colhead.gold { fill: var(--gold); }
+.node { cursor: pointer; }
+.node rect.box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; transition: stroke .2s, fill .2s; }
+.node rect.tag { stroke: none; }
+.node .t { font: 600 13px var(--body); fill: var(--ink); }
+.node .s { font: 400 10.5px var(--mono); fill: var(--muted); }
+.node.visited rect.box { stroke: var(--muted); }
+.node.active rect.box { stroke: var(--accent); stroke-width: 2.4; fill: var(--accent-soft); }
+.node.failed rect.box { stroke: var(--bad); stroke-width: 2.4; }
+.node.selected rect.box { stroke-dasharray: 5 3; stroke: var(--ink); stroke-width: 1.8; }
+.node:hover rect.box { stroke: var(--accent); }
+.node:focus { outline: none; }
+.node:focus-visible rect.box { stroke: var(--accent); stroke-width: 2.4; }
+.gate .gt { font: 700 11px var(--body); letter-spacing: .14em; fill: var(--muted); }
+.gate.active .gt { fill: var(--accent); } .gate.failed .gt { fill: var(--bad); }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.6; }
+.edge.dashed { stroke-dasharray: 4 4; }
+.edge.active { stroke: var(--accent); stroke-width: 2.4; stroke-dasharray: 7 5; animation: flow 0.9s linear infinite; }
+.edge.failed { stroke: var(--bad); stroke-width: 2.4; stroke-dasharray: 3 4; }
+@keyframes flow { to { stroke-dashoffset: -24; } }
+@media (prefers-reduced-motion: reduce) { .edge.active { animation: none; } .bar > i { transition: none; } }
+.metaband { fill: none; stroke: var(--line); stroke-dasharray: 3 5; }
+.metalabel { font: 700 11px var(--body); letter-spacing: .12em; fill: var(--muted); }
+.arrow { fill: var(--line); } .arrow-on { fill: var(--accent); } .arrow-bad { fill: var(--bad); }
+
+/* panels */
+.panels { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 860px) { .panels { grid-template-columns: minmax(0, 1fr); } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.card h2 { font-size: 1.3rem; font-weight: 700; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 600 11px var(--body); letter-spacing: .06em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.chip.bronze { color: var(--bronze); } .chip.silver { color: var(--silver); } .chip.gold { color: var(--gold); }
+.chip.orch, .chip.meta, .chip.source, .chip.serve { color: var(--muted); } .chip.gate { color: var(--accent); }
+.chip.bad { color: var(--bad); } .chip.ok { color: var(--ok); }
+.chip.file { color: var(--ink); text-transform: none; letter-spacing: 0; font-family: var(--mono); font-weight: 500; border-color: var(--line); background: var(--sunken); }
+.why { margin: 0; max-width: 68ch; }
+.why p { margin: 0 0 8px; }
+.why ul { margin: 0; padding-left: 18px; }
+.stack { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font: 500 12px var(--mono); color: var(--muted); }
+.stack span.fn { background: var(--sunken); color: var(--ink); padding: 2px 7px; border-radius: 4px; }
+.stack span.fn:last-child { background: var(--accent-soft); color: var(--accent); }
+pre.code { margin: 0; background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font: 12.5px/1.55 var(--mono); color: var(--ink); tab-size: 4; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; font-size: 13.5px; margin: 0; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; font-variant-numeric: tabular-nums; }
+.backrow { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+.console { background: var(--console-bg); color: var(--console-fg); border-radius: 10px; padding: 0; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.console header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid #ffffff14; font: 500 12px var(--mono); color: var(--console-dim); gap: 8px; }
+.console .log { font: 12px/1.6 var(--mono); padding: 12px 14px; height: 420px; overflow: auto; white-space: pre; }
+.log .ln { display: block; }
+.log .ln.new { color: #ffffff; }
+.log .ts { color: var(--console-dim); }
+.log .lv-warn { color: #f0b04f; } .log .lv-err { color: #ff7b6c; } .log .pass { color: #5cc98a; } .log .fail { color: #ff7b6c; }
+.log .cmd { color: #9fb6ff; }
+
+/* volume strip */
+.volume { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+@media (max-width: 760px) { .volume { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.vol { padding: 14px 16px; border-left: 3px solid var(--c, var(--line)); display: flex; flex-direction: column; gap: 2px; }
+.vol + .vol { box-shadow: inset 1px 0 0 var(--line); }
+.vol b { font: 800 1.5rem/1.2 var(--display); font-variant-numeric: tabular-nums; }
+.vol small { color: var(--muted); font-size: 12.5px; }
+.foot { color: var(--muted); font-size: 12.5px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">NYC Mobility Lakehouse · how the code runs</div>
+    <h1>Follow one pipeline run, function by function</h1>
+    <p class="lede">Press <strong>Play</strong> or use <strong>Next</strong> to step through <code>lakehouse run --start 2024-01 --end 2024-03</code>. The diagram shows where data is moving at each step. Below it you'll see the call stack, the code that runs, and the log lines that real run printed. Click any box to inspect that component.</p>
+  </header>
+
+  <div class="controls" role="group" aria-label="Playback">
+    <div class="seg" id="scenarios" role="group" aria-label="Scenario"></div>
+    <div class="transport">
+      <button class="btn" id="prev" aria-label="Previous step">◀ Prev</button>
+      <button class="btn primary" id="play">▶ Play</button>
+      <button class="btn" id="next" aria-label="Next step">Next ▶</button>
+    </div>
+    <div class="progress"><div class="bar"><i id="barfill"></i></div><span class="counter" id="counter">0 / 0</span></div>
+  </div>
+
+  <div class="diagram">
+    <svg id="svg" viewBox="0 0 1160 566" role="img" aria-label="Pipeline diagram: sources, bronze, silver, quality gate, gold, quality gate, serving, and the meta audit schema"></svg>
+    <div class="hint">Tip: use the ← → keys to step and Space to play or pause. On a narrow screen, scroll the diagram sideways.</div>
+  </div>
+
+  <div class="panels">
+    <section class="card" id="panel" aria-live="polite"></section>
+    <section class="console" aria-label="Pipeline log output">
+      <header><span>terminal: pipeline log</span><span id="logscn"></span></header>
+      <div class="log" id="log"></div>
+    </section>
+  </div>
+
+  <div>
+    <div class="eyebrow" style="margin-bottom:8px">Data volume at each layer (real Q1 2024 run)</div>
+    <div class="volume">
+      <div class="vol" style="--c: var(--bronze)"><span class="eyebrow">Bronze</span><b>9,554,778</b><small>raw trip rows · 160 MB Parquet, as published by TLC</small></div>
+      <div class="vol" style="--c: var(--silver)"><span class="eyebrow">Silver</span><b>9,203,917</b><small>clean rows · 350,861 (3.67%) sent to quarantine</small></div>
+      <div class="vol" style="--c: var(--gold)"><span class="eyebrow">Gold fact</span><b>229,956</b><small>hourly × zone rows · about 40× fewer than Silver</small></div>
+      <div class="vol" style="--c: var(--gold)"><span class="eyebrow">Gold marts</span><b>91 · 177 · 768</b><small>daily KPIs · weather impact · zone-month rows</small></div>
+    </div>
+  </div>
+  <p class="foot">Row counts and the "First full run" log lines come from the real run on 28 Oct 2026. The other two scenarios show what the code does in those situations, so their log lines are representative, not captured.</p>
+</div>
+
+<script>
+/* ---------- diagram model ---------- */
+const NODES = {
+  orch:        { x: 20,  y: 14,  w: 1120, h: 44, layer: "orch",   title: "lakehouse run  →  pipeline.run()", sub: "__main__.py · pipeline.py · metadata.tracked_run" },
+  src_weather: { x: 20,  y: 120, w: 170, h: 58, layer: "source", title: "Open-Meteo API", sub: "hourly JSON" },
+  src_zones:   { x: 20,  y: 200, w: 170, h: 58, layer: "source", title: "TLC zone lookup", sub: "CSV · 265 zones" },
+  src_trips:   { x: 20,  y: 280, w: 170, h: 58, layer: "source", title: "TLC yellow trips", sub: "monthly Parquet" },
+  br_weather:  { x: 230, y: 120, w: 170, h: 58, layer: "bronze", title: "weather.json", sub: "year=/month=/" },
+  br_zones:    { x: 230, y: 200, w: 170, h: 58, layer: "bronze", title: "taxi_zone_lookup.csv", sub: "zones/" },
+  br_trips:    { x: 230, y: 280, w: 170, h: 58, layer: "bronze", title: "trips.parquet", sub: "year=/month=/" },
+  sv_weather:  { x: 440, y: 120, w: 170, h: 58, layer: "silver", title: "weather_hourly", sub: "1 row / hour" },
+  sv_zones:    { x: 440, y: 200, w: 170, h: 58, layer: "silver", title: "zones", sub: "zones.parquet" },
+  sv_trips:    { x: 440, y: 280, w: 170, h: 58, layer: "silver", title: "trips", sub: "typed · deduped" },
+  quarantine:  { x: 440, y: 362, w: 170, h: 58, layer: "silver", title: "quarantine_trips", sub: "+ reject_reason" },
+  gate1:       { x: 650, y: 120, w: 44,  h: 218, layer: "gate",  title: "SILVER DQ GATE", gate: true },
+  dims:        { x: 734, y: 120, w: 170, h: 58, layer: "gold",   title: "dim_date · dim_zone", sub: "dimensions" },
+  facts:       { x: 734, y: 200, w: 170, h: 58, layer: "gold",   title: "fct_*_hourly", sub: "trips · weather" },
+  marts:       { x: 734, y: 280, w: 170, h: 58, layer: "gold",   title: "mart_* (3)", sub: "kpis · weather · zones" },
+  gate2:       { x: 944, y: 120, w: 44,  h: 218, layer: "gate",  title: "GOLD DQ GATE", gate: true },
+  dashboard:   { x: 1010, y: 200, w: 132, h: 58, layer: "serve", title: "Streamlit", sub: "dashboard/app.py" },
+  exports:     { x: 1010, y: 280, w: 132, h: 58, layer: "serve", title: "gold/*.parquet", sub: "for any BI tool" },
+  meta_runs:   { x: 20,  y: 484, w: 170, h: 58, layer: "meta",   title: "pipeline_runs", sub: "run audit log" },
+  meta_ingest: { x: 230, y: 484, w: 170, h: 58, layer: "meta",   title: "ingestion_log", sub: "sha256 manifest" },
+  meta_dq:     { x: 650, y: 484, w: 254, h: 58, layer: "meta",   title: "dq_results", sub: "every check, every run" },
+};
+const EDGES = [
+  "src_weather>br_weather", "src_zones>br_zones", "src_trips>br_trips",
+  "br_weather>sv_weather", "br_zones>sv_zones", "br_trips>sv_trips", "sv_trips>quarantine",
+  "sv_weather>gate1", "sv_zones>gate1", "sv_trips>gate1",
+  "gate1>dims", "gate1>facts", "facts>marts",
+  "dims>gate2", "facts>gate2", "marts>gate2", "gate2>dashboard", "gate2>exports",
+  "br_trips>meta_ingest", "gate1>meta_dq", "gate2>meta_dq",
+];
+const DASHED = new Set(["sv_trips>quarantine", "br_trips>meta_ingest", "gate1>meta_dq", "gate2>meta_dq"]);
+const LAYER_COLOR = { bronze: "var(--bronze)", silver: "var(--silver)", gold: "var(--gold)", source: "var(--muted)", serve: "var(--muted)", meta: "var(--muted)", orch: "var(--accent)", gate: "var(--accent)" };
+
+/* ---------- component inspector content ---------- */
+const INFO = {
+  orch: { file: "src/lakehouse/__main__.py · pipeline.py",
+    why: `<p>The entry point. <code>main()</code> parses the CLI arguments, expands the month range, and calls <code>pipeline.run()</code>, which runs the stages in order. Quality gates sit between the stages, and the whole run is wrapped in <code>tracked_run()</code> so it is recorded in the audit log.</p>`,
+    kv: [["Command", "lakehouse run --start 2024-01 --end 2024-03"], ["Stages", "bronze → silver → DQ → gold → DQ"], ["Exit code", "0 on success, 1 on any failure"]],
+    code: `def run(settings, months, stages=("bronze", "silver", "gold"), force=False):
+    con = connect(settings)
+    with tracked_run(con, f"run stages=...") as run_id:
+        if "bronze" in stages:
+            bronze.ingest_zones(con, settings, run_id, force)
+            for y, m in months:
+                bronze.ingest_trips(con, settings, y, m, run_id, force)
+                bronze.ingest_weather(con, settings, y, m, run_id, force)
+        if "silver" in stages:
+            silver.build_zones(con, settings)
+            for y, m in months:
+                silver.build_trips(con, settings, y, m)
+                silver.build_weather(con, settings, y, m)
+            gold.register_silver_views(con, settings)
+            run_checks(con, SILVER_CHECKS, run_id)   # quality gate
+        if "gold" in stages:
+            gold.build(con, settings)
+            run_checks(con, GOLD_CHECKS, run_id)` },
+  src_weather: { file: "config.py → WEATHER_URL",
+    why: `<p>Open-Meteo's free historical archive API, which needs no key. It returns columnar JSON: one array per variable, all aligned by index with <code>hourly.time</code>.</p>`,
+    kv: [["Location", "40.7128, -74.0060 (NYC)"], ["Variables", "temperature, precipitation, rain, snowfall, wind"], ["Timezone", "America/New_York, to match taxi timestamps"]],
+    code: `{"hourly": {
+   "time":          ["2024-01-01T00:00", "2024-01-01T01:00", ...],
+   "temperature_2m":[4.1, 3.9, ...],
+   "precipitation": [0.0, 0.2, ...], ...}}` },
+  src_zones: { file: "config.py → TLC_ZONES_URL",
+    why: `<p>The static reference table that maps <code>LocationID</code> (1–265) to borough, zone name and service zone. It is fetched once, with partition key <code>static</code>.</p>`,
+    kv: [["Rows", "265"], ["Columns", "LocationID, Borough, Zone, service_zone"]], code: `LocationID,Borough,Zone,service_zone
+1,"EWR","Newark Airport","EWR"
+132,"Queens","JFK Airport","Airports"` },
+  src_trips: { file: "config.py → TLC_TRIPS_URL",
+    why: `<p>NYC Taxi &amp; Limousine Commission trip records, published monthly as Parquet about two months after the month ends. That's why <code>validate_months()</code> rejects months that aren't complete yet.</p>`,
+    kv: [["Jan 2024", "2,964,624 rows"], ["Feb 2024", "3,007,526 rows"], ["Mar 2024", "3,582,628 rows"]],
+    code: `TLC_TRIPS_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data/"
+                "yellow_tripdata_{year}-{month:02d}.parquet"` },
+  br_weather: { file: "src/lakehouse/bronze.py → ingest_weather()", why: `<p>Saves the API response <em>exactly as received</em>, then parses it once as JSON so a broken payload fails here instead of later in Silver.</p>`,
+    kv: [["Path", "bronze/weather/year=2024/month=01/weather.json"], ["Size", "~25 KB per month"]],
+    code: `path = _land(con, settings, "weather", f"{year}-{month:02d}", dest,
+             config.WEATHER_URL, run_id, force, params)
+json.loads(path.read_text())  # fail fast on a malformed payload` },
+  br_zones: { file: "src/lakehouse/bronze.py → ingest_zones()", why: `<p>Same landing logic as the other sources. Zones are static, so the file is downloaded once and then skipped on every later run.</p>`, kv: [["Path", "bronze/zones/taxi_zone_lookup.csv"]],
+    code: `def ingest_zones(con, settings, run_id, force=False):
+    dest = settings.bronze / "zones" / "taxi_zone_lookup.csv"
+    return _land(con, settings, "zones", "static", dest,
+                 config.TLC_ZONES_URL, run_id, force)` },
+  br_trips: { file: "src/lakehouse/bronze.py → _land() / _download()",
+    why: `<p>Bronze never changes source data. It guarantees three things:</p><ul><li><strong>Atomic writes:</strong> the file streams into <code>.part</code> and is renamed only when complete, so a crash never leaves half a file.</li><li><strong>Retries:</strong> 3 attempts with exponential backoff (2s, 4s).</li><li><strong>Idempotency:</strong> if <code>ingestion_log</code> already has this source and month, the download is skipped.</li></ul>`,
+    kv: [["Path", "bronze/tlc_yellow/year=2024/month=01/trips.parquet"], ["Total size", "160 MB for 3 months"]],
+    code: `def _land(con, settings, source, partition_key, dest, url, run_id, force, params=None):
+    if not force and already_ingested(con, source, partition_key) and dest.exists():
+        log.info("[bronze] %s %s already ingested - skipping", source, partition_key)
+        return dest
+    _download(url, dest, params)            # .part -> atomic rename, with retries
+    log_ingestion(con, source, partition_key, dest,
+                  _sha256(dest), dest.stat().st_size, run_id)
+    return dest` },
+  sv_weather: { file: "sql/silver/weather.sql · silver.build_weather()",
+    why: `<p>Flattens the parallel JSON arrays into one row per hour (DuckDB's <code>unnest</code> zips arrays together), then labels each hour with a <code>weather_condition</code>. When clocks fall back at the end of daylight saving time, the same local hour appears twice; <code>QUALIFY</code> keeps one copy.</p>`,
+    kv: [["Rows", "2,184 hours (744 + 696 + 744)"], ["Buckets", "dry · light_rain · heavy_rain (≥2.5 mm/h) · snow"]],
+    code: `SELECT CAST(unnest(hourly.time) AS TIMESTAMP)       AS observed_hour,
+       CAST(unnest(hourly.precipitation) AS DOUBLE) AS precipitation_mm, ...
+...
+CASE WHEN snowfall_cm > 0         THEN 'snow'
+     WHEN precipitation_mm >= 2.5 THEN 'heavy_rain'
+     WHEN precipitation_mm > 0    THEN 'light_rain'
+     ELSE 'dry' END AS weather_condition` },
+  sv_zones: { file: "sql/silver/zones.sql", why: `<p>Trims text, replaces <code>N/A</code> with <code>Unknown</code>, removes duplicate IDs, and adds an <code>is_airport</code> flag for EWR, JFK and LGA (zones 1, 132 and 138).</p>`, kv: [["Rows", "265"]],
+    code: `SELECT CAST(LocationID AS INTEGER)                       AS zone_id,
+       COALESCE(nullif(trim(Borough), 'N/A'), 'Unknown') AS borough,
+       ...
+       CAST(LocationID AS INTEGER) IN (1, 132, 138)      AS is_airport` },
+  sv_trips: { file: "sql/silver/trips.sql · silver.build_trips()",
+    why: `<p>The core cleaning step. For each month it:</p><ul><li>casts every column to the correct type and renames them to snake_case</li><li>builds a deterministic <code>trip_id</code> = md5(vendor, times, zones, distance, amount) and finds duplicates with <code>row_number()</code></li><li>derives duration, speed, tip %, the airport flag and the payment-type name</li><li>tags each row with the <em>first</em> rule it breaks (10 rules in order)</li></ul><p>Clean rows go to <code>silver/trips/</code>, rejected rows go to quarantine. Each month's partition is overwritten, so re-running a month never duplicates data.</p>`,
+    kv: [["Clean rows", "9,203,917"], ["Size", "335 MB zstd Parquet"], ["Time", "~2 s per month"]],
+    code: `CASE
+  WHEN _dup_rank > 1                                   THEN 'duplicate'
+  WHEN pickup_at IS NULL OR dropoff_at IS NULL         THEN 'missing_timestamp'
+  WHEN pickup_at <  TIMESTAMP '$period_start'
+    OR pickup_at >= TIMESTAMP '$period_end'            THEN 'out_of_period'
+  WHEN trip_duration_min <= 0                          THEN 'non_positive_duration'
+  WHEN trip_duration_min > 360                         THEN 'duration_over_6h'
+  WHEN trip_distance_mi <= 0 OR trip_distance_mi > 200 THEN 'invalid_distance'
+  WHEN fare_amount < 0 OR total_amount < 0             THEN 'negative_amount'
+  WHEN total_amount > 1000                             THEN 'implausible_amount'
+  WHEN pickup_zone_id NOT BETWEEN 1 AND 265 ...        THEN 'unknown_zone'
+  WHEN <speed> > 100                                   THEN 'impossible_speed'
+END AS reject_reason` },
+  quarantine: { file: "silver.build_trips() → silver/quarantine_trips/",
+    why: `<p>Rejected rows are <strong>kept, not deleted</strong>, along with the reason. That lets you answer "how much data did we drop, and why?", and the silver gate warns if more than 10% of rows are rejected.</p>`,
+    kv: [["invalid_distance", "213,412"], ["negative_amount", "126,269"], ["duration_over_6h", "5,434"], ["impossible_speed", "2,887"], ["non_positive_duration", "2,801"], ["out_of_period", "56"], ["Total", "350,861 (3.67%)"]],
+    code: `copy_to_parquet(con,
+    "SELECT * FROM trips_staged WHERE reject_reason IS NOT NULL",
+    settings.silver / "quarantine_trips" / part / "rejected.parquet")` },
+  gate1: { file: "src/lakehouse/quality.py → SILVER_CHECKS",
+    why: `<p>Seven declarative checks. Each one is a SQL query that returns a number, plus a rule for passing. Every result is saved to <code>meta.dq_results</code>. If any <strong>critical</strong> check fails, <code>DataQualityError</code> stops the run <em>before</em> Gold is rebuilt, so dashboards keep yesterday's good data instead of showing bad data.</p>`,
+    kv: [["Critical", "trips_not_empty · trip_id_unique · pickup_ts_not_null · no_negative_amounts · weather_hour_completeness_pct"], ["Warn", "reject_rate_pct ≤ 10 · zone_referential_integrity"]],
+    code: `Check("silver", "trip_id_unique", "critical",
+      "SELECT count(*) - count(DISTINCT trip_id) FROM silver_trips",
+      "= 0", lambda v: v == 0),
+...
+critical = [r["check"] for r in results
+            if not r["passed"] and r["severity"] == "critical"]
+if critical:
+    raise DataQualityError(f"Critical data-quality checks failed: ...")` },
+  dims: { file: "sql/gold/01_dimensions.sql",
+    why: `<p>The star schema's dimensions. <code>dim_zone</code> comes from Silver zones. <code>dim_date</code> is <em>generated</em> with <code>range()</code> between the first and last pickup dates, so days with no trips would still appear.</p>`,
+    kv: [["dim_zone", "265 rows"], ["dim_date", "91 rows (1 Jan – 31 Mar)"]],
+    code: `CREATE OR REPLACE TABLE gold.dim_date AS
+WITH bounds AS (SELECT min(pickup_date) d0, max(pickup_date) d1 FROM silver_trips)
+SELECT CAST(strftime(d, '%Y%m%d') AS INTEGER) AS date_key,
+       dayname(d) AS day_name, isodow(d) IN (6, 7) AS is_weekend, ...
+FROM bounds, range(d0, d1 + INTERVAL 1 DAY, INTERVAL 1 DAY) AS t(d);` },
+  facts: { file: "sql/gold/02_facts.sql",
+    why: `<p>The fact table's grain is <strong>one row per pickup hour per pickup zone</strong>. Aggregating to that grain shrinks 9.2M trips to 230K rows, so dashboard queries run in milliseconds. It stores additive sums only; averages are computed later as sum ÷ count, which keeps them correct at any level of roll-up.</p>`,
+    kv: [["fct_trips_hourly", "229,956 rows"], ["fct_weather_hourly", "2,184 rows"]],
+    code: `CREATE OR REPLACE TABLE gold.fct_trips_hourly AS
+SELECT t.pickup_hour, ..., t.pickup_zone_id,
+       count(*)              AS trips,
+       sum(t.total_amount)   AS revenue,
+       sum(t.duration_min)   AS duration_min,
+       count(*) FILTER (WHERE t.payment_type = 'credit_card') AS credit_card_trips
+FROM silver_trips t
+GROUP BY ALL;` },
+  marts: { file: "sql/gold/03_marts.sql",
+    why: `<p>Three tables built to answer business questions:</p><ul><li><code>mart_daily_kpis</code>: daily trips, revenue and speed with weather, plus a 7-day rolling average and day-over-day change</li><li><code>mart_weather_impact</code>: demand lift compared with <em>dry weather at the same hour and day type</em>, a fair like-for-like comparison</li><li><code>mart_zone_monthly</code>: zone revenue rank, share and month-over-month change</li></ul>`,
+    kv: [["Rows", "91 · 177 · 768"], ["Finding", "heavy rain +15.5%, snow −12.5% (weekday daytime)"]],
+    code: `round(avg(trips) OVER (ORDER BY date
+      ROWS BETWEEN 6 PRECEDING AND CURRENT ROW), 0)         AS trips_7d_avg,
+rank() OVER (PARTITION BY year_month ORDER BY revenue DESC) AS revenue_rank,
+round(100.0 * (a.avg_trips_per_hour / dry.avg_trips_per_hour - 1), 1)
+                                                           AS demand_lift_vs_dry_pct` },
+  gate2: { file: "src/lakehouse/quality.py → GOLD_CHECKS",
+    why: `<p>Checks that the Gold totals match Silver exactly. Total trips and total revenue in the fact table must equal Silver's. This catches any join or aggregation bug that would lose or double-count rows. It also checks that no dates are missing and that weather joined for every day.</p>`,
+    kv: [["Critical", "trip_count_reconciles (diff = 0) · revenue_reconciles_abs_diff (< 0.01)"], ["Warn", "daily_kpis_no_date_gaps · weather_joined_all_days"]],
+    code: `Check("gold", "revenue_reconciles_abs_diff", "critical",
+      "SELECT abs((SELECT sum(revenue) FROM gold.fct_trips_hourly)"
+      "         - (SELECT sum(total_amount) FROM silver_trips))",
+      "< 0.01", lambda v: v < 0.01)` },
+  dashboard: { file: "dashboard/app.py",
+    why: `<p>A Streamlit app that opens the warehouse <strong>read-only</strong> and queries only Gold and meta tables. It shows KPI tiles, the daily trend, weather lift, top zones per month, and a panel with pipeline runs, DQ results and quarantine reasons.</p>`,
+    kv: [["Run", "streamlit run dashboard/app.py"]],
+    code: `@st.cache_data
+def q(sql: str):
+    with duckdb.connect(str(settings.warehouse), read_only=True) as con:
+        return con.sql(sql).df()` },
+  exports: { file: "src/lakehouse/gold.py → build()", why: `<p>Every Gold table is also exported to <code>data/gold/&lt;table&gt;.parquet</code>, so Power BI, Spark, pandas or Excel can read the results without DuckDB.</p>`, kv: [["Size", "4.7 MB total"]],
+    code: `for t in tables:
+    copy_to_parquet(con, f"SELECT * FROM gold.{t}",
+                    settings.gold / f"{t}.parquet")` },
+  meta_runs: { file: "src/lakehouse/metadata.py → tracked_run()",
+    why: `<p>A context manager around the whole run. It inserts a <code>running</code> row on entry, sets it to <code>success</code> on exit, or sets it to <code>failed</code> with the error message if an exception escapes, and then re-raises the exception.</p>`, kv: [["Show", "lakehouse status"]],
+    code: `@contextmanager
+def tracked_run(con, command):
+    run_id = uuid.uuid4().hex[:12]
+    con.execute("INSERT INTO meta.pipeline_runs VALUES (?, ?, ?, NULL, 'running', NULL)", ...)
+    try:
+        yield run_id
+    except Exception as exc:
+        con.execute("UPDATE ... SET status='failed', error=? ...", ...)
+        raise
+    con.execute("UPDATE ... SET status='success' ...", ...)` },
+  meta_ingest: { file: "src/lakehouse/metadata.py → log_ingestion()", why: `<p>The Bronze manifest: one row per (source, partition) with SHA-256, size, time and run_id. <code>already_ingested()</code> reads it to skip work, which makes ingestion idempotent.</p>`, kv: [["Primary key", "(source, partition_key)"], ["Rows now", "7 (zones + 3 × trips + 3 × weather)"]],
+    code: `INSERT OR REPLACE INTO meta.ingestion_log
+VALUES (source, partition_key, path, sha256, bytes, ingested_at, run_id)` },
+  meta_dq: { file: "src/lakehouse/quality.py → run_checks()", why: `<p>Every check result from every run: observed value, expected rule, severity and pass/fail. Over time this table shows how data quality changes, for example whether TLC's reject rate is rising.</p>`, kv: [["Per run", "11 rows (7 silver + 4 gold)"]],
+    code: `con.execute("INSERT INTO meta.dq_results VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    [run_id, c.layer, c.name, c.severity, ok, f"{value:.4g}", c.expected, now()])` },
+};
+
+/* ---------- scenarios: ordered call sequence ---------- */
+const L = (t, msg, lvl = "INFO") => ({ t, msg, lvl });
+const NORMAL = [
+  { title: "CLI parses the command", nodes: ["orch"], stack: ["main"], file: "__main__.py",
+    why: `<p><code>argparse</code> reads <code>--start 2024-01 --end 2024-03</code>. <code>month_range()</code> expands that to <code>[(2024,1), (2024,2), (2024,3)]</code>, and <code>validate_months()</code> rejects any month TLC hasn't published yet.</p>`,
+    code: `months = month_range(args.start, args.end or args.start)
+validate_months(months)
+run(settings, months, tuple(args.stages), args.force)`,
+    logs: [{ cmd: "$ lakehouse run --start 2024-01 --end 2024-03" }] },
+  { title: "Open the warehouse and start the audit record", nodes: ["orch", "meta_runs"], stack: ["main", "run", "connect", "tracked_run"], file: "metadata.py",
+    why: `<p><code>connect()</code> opens <code>data/warehouse.duckdb</code> and creates the <code>meta</code> schema if needed. <code>tracked_run()</code> creates run <code>2f7e5ac0c879</code> with status <code>running</code>. Everything after this happens inside that context manager.</p>`,
+    code: `con = connect(settings)
+with tracked_run(con, "run stages=bronze,silver,gold ...") as run_id:
+    ...`, logs: [] },
+  { title: "Bronze: land the zone lookup", nodes: ["src_zones", "br_zones", "meta_ingest"], edges: ["src_zones>br_zones"], stack: ["run", "bronze.ingest_zones", "_land", "_download"], file: "bronze.py",
+    why: `<p>Nothing has been ingested yet, so <code>already_ingested()</code> returns False and the CSV is downloaded. It streams to <code>.part</code>, gets renamed, is hashed with SHA-256, and is recorded in <code>meta.ingestion_log</code>.</p>`,
+    code: INFO.br_trips.code, logs: [L("00:44:58", "[bronze] downloading zones static")] },
+  { title: "Bronze: land January trips", nodes: ["src_trips", "br_trips", "meta_ingest"], edges: ["src_trips>br_trips", "br_trips>meta_ingest"], stack: ["run", "bronze.ingest_trips", "_land", "_download"], file: "bronze.py",
+    why: `<p>Downloads the ~48 MB Parquet file for 2024-01 into <code>bronze/tlc_yellow/year=2024/month=01/</code>. The file is not changed at all. This is the raw record you can always rebuild from.</p>`,
+    code: `dest = settings.bronze / "tlc_yellow" / f"year={year}" / f"month={month:02d}" / "trips.parquet"
+url  = config.TLC_TRIPS_URL.format(year=year, month=month)
+return _land(con, settings, "tlc_yellow", f"{year}-{month:02d}", dest, url, run_id, force)`,
+    logs: [L("00:44:58", "[bronze] downloading tlc_yellow 2024-01")] },
+  { title: "Bronze: land January weather", nodes: ["src_weather", "br_weather", "meta_ingest"], edges: ["src_weather>br_weather"], stack: ["run", "bronze.ingest_weather", "_land"], file: "bronze.py",
+    why: `<p>Calls Open-Meteo with the month's first and last dates (<code>calendar.monthrange</code> gives the last day), then checks that the response is valid JSON.</p>`,
+    code: INFO.br_weather.code, logs: [L("00:45:02", "[bronze] downloading weather 2024-01")] },
+  { title: "Bronze: repeat for February and March", nodes: ["src_trips", "src_weather", "br_trips", "br_weather", "meta_ingest"], edges: ["src_trips>br_trips", "src_weather>br_weather"], stack: ["run", "for y, m in months"], file: "pipeline.py",
+    why: `<p>The same two calls run for each remaining month. All of Bronze, 160 MB, took about 13 seconds, almost all of it network time.</p>`,
+    code: `for y, m in months:
+    bronze.ingest_trips(con, settings, y, m, run_id, force)
+    bronze.ingest_weather(con, settings, y, m, run_id, force)`,
+    logs: [L("00:45:03", "[bronze] downloading tlc_yellow 2024-02"), L("00:45:05", "[bronze] downloading weather 2024-02"), L("00:45:06", "[bronze] downloading tlc_yellow 2024-03"), L("00:45:09", "[bronze] downloading weather 2024-03")] },
+  { title: "Silver: clean zones", nodes: ["br_zones", "sv_zones"], edges: ["br_zones>sv_zones"], stack: ["run", "silver.build_zones", "render", "copy_to_parquet"], file: "silver.py",
+    why: `<p><code>render()</code> loads <code>sql/silver/zones.sql</code> and fills in the <code>$src</code> path. The SQL creates a temp table, and <code>copy_to_parquet()</code> writes it to <code>silver/zones/zones.parquet</code>.</p>`,
+    code: `con.execute(render("silver/zones.sql", src=settings.bronze / "zones" / "taxi_zone_lookup.csv"))
+copy_to_parquet(con, "SELECT * FROM zones_staged ORDER BY zone_id",
+                settings.silver / "zones" / "zones.parquet")`, logs: [] },
+  { title: "Silver: validate January trips", nodes: ["br_trips", "sv_trips", "quarantine"], edges: ["br_trips>sv_trips", "sv_trips>quarantine"], stack: ["run", "silver.build_trips", "render(trips.sql)", "copy_to_parquet ×2"], file: "silver.py · sql/silver/trips.sql",
+    why: `<p>DuckDB reads the raw Parquet and runs the cleaning SQL into <code>trips_staged</code>. Each row gets <code>reject_reason</code>, which is NULL for clean rows. Then two <code>COPY</code> statements split the rows: clean rows go to <code>silver/trips/…</code> and the rest go to <code>quarantine_trips/…</code>.</p><p><strong>2,964,624 rows processed in about 2 seconds.</strong></p>`,
+    code: `copy_to_parquet(con,
+    "SELECT * EXCLUDE (reject_reason) FROM trips_staged WHERE reject_reason IS NULL ORDER BY pickup_at",
+    settings.silver / "trips" / part / "trips.parquet")
+copy_to_parquet(con,
+    "SELECT * FROM trips_staged WHERE reject_reason IS NOT NULL",
+    settings.silver / "quarantine_trips" / part / "rejected.parquet")`,
+    logs: [L("00:45:11", "[silver] trips 2024-01: {'total': 2964624, 'accepted': 2867215, 'rejected': 97409}")] },
+  { title: "Silver: flatten January weather", nodes: ["br_weather", "sv_weather"], edges: ["br_weather>sv_weather"], stack: ["run", "silver.build_weather", "render(weather.sql)"], file: "silver.py · sql/silver/weather.sql",
+    why: `<p><code>unnest()</code> turns the JSON arrays into 744 hourly rows (31 days × 24), and each hour gets its <code>weather_condition</code> label.</p>`,
+    code: INFO.sv_weather.code, logs: [L("00:45:11", "[silver] weather 2024-01: 744 hours")] },
+  { title: "Silver: repeat for February and March", nodes: ["sv_trips", "sv_weather", "quarantine"], edges: ["br_trips>sv_trips", "br_weather>sv_weather", "sv_trips>quarantine"], stack: ["run", "for y, m in months"], file: "pipeline.py",
+    why: `<p>Each month is its own partition, so this step can be re-run safely. A rerun overwrites that month's files instead of adding to them.</p>`,
+    code: `for y, m in months:
+    silver.build_trips(con, settings, y, m)
+    silver.build_weather(con, settings, y, m)`,
+    logs: [L("00:45:13", "[silver] trips 2024-02: {'total': 3007526, 'accepted': 2899198, 'rejected': 108328}"), L("00:45:13", "[silver] weather 2024-02: 696 hours"), L("00:45:15", "[silver] trips 2024-03: {'total': 3582628, 'accepted': 3437504, 'rejected': 145124}"), L("00:45:15", "[silver] weather 2024-03: 744 hours")] },
+  { title: "Quality gate 1: Silver checks", nodes: ["gate1", "meta_dq"], edges: ["sv_weather>gate1", "sv_zones>gate1", "sv_trips>gate1", "gate1>meta_dq"], stack: ["run", "gold.register_silver_views", "run_checks(SILVER_CHECKS)"], file: "quality.py",
+    why: `<p>First, <code>register_silver_views()</code> creates views over all Silver Parquet files using a glob (<code>trips/*/*/*.parquet</code>). Then all 7 checks run against those views. <strong>All pass</strong>, so the run continues to Gold.</p>`,
+    code: INFO.gate1.code,
+    logs: [L("00:45:15", "[dq:silver] trips_not_empty                  PASS observed=9.204e+06 expected > 0"), L("00:45:16", "[dq:silver] trip_id_unique                   PASS observed=0 expected = 0"), L("00:45:16", "[dq:silver] pickup_ts_not_null               PASS observed=0 expected = 0"), L("00:45:16", "[dq:silver] no_negative_amounts              PASS observed=0 expected = 0"), L("00:45:16", "[dq:silver] reject_rate_pct                  PASS observed=3.672 expected <= 10%"), L("00:45:16", "[dq:silver] zone_referential_integrity       PASS observed=0 expected = 0 orphans"), L("00:45:16", "[dq:silver] weather_hour_completeness_pct    PASS observed=100 expected >= 99%")] },
+  { title: "Gold: build dimensions", nodes: ["dims"], edges: ["gate1>dims"], stack: ["run", "gold.build", "render(01_dimensions.sql)"], file: "sql/gold/01_dimensions.sql",
+    why: `<p><code>dim_zone</code> is copied from Silver, and <code>dim_date</code> is generated for every day from 1 Jan to 31 Mar (91 rows).</p>`,
+    code: INFO.dims.code, logs: [L("00:45:16", "[gold] running gold/01_dimensions.sql")] },
+  { title: "Gold: aggregate to hourly facts", nodes: ["facts"], edges: ["gate1>facts"], stack: ["run", "gold.build", "render(02_facts.sql)"], file: "sql/gold/02_facts.sql",
+    why: `<p>9,203,917 trips → <strong>229,956</strong> (hour × zone) rows. All the work is done in a single <code>GROUP BY ALL</code>.</p>`,
+    code: INFO.facts.code, logs: [L("00:45:16", "[gold] running gold/02_facts.sql")] },
+  { title: "Gold: build the business marts", nodes: ["marts"], edges: ["facts>marts"], stack: ["run", "gold.build", "render(03_marts.sql)"], file: "sql/gold/03_marts.sql",
+    why: `<p>Window functions compute the 7-day average, day-over-day change, revenue rank and month-over-month change. The weather mart compares each condition with dry weather at the same hour.</p>`,
+    code: INFO.marts.code, logs: [L("00:45:16", "[gold] running gold/03_marts.sql")] },
+  { title: "Gold: export every table to Parquet", nodes: ["dims", "facts", "marts", "exports"], stack: ["run", "gold.build", "copy_to_parquet"], file: "gold.py",
+    why: `<p>Lists the <code>gold</code> schema from <code>information_schema</code> and writes each table to <code>data/gold/</code>.</p>`,
+    code: INFO.exports.code, logs: [L("00:45:16", "[gold] built 7 tables: dim_date, dim_zone, fct_trips_hourly, fct_weather_hourly, mart_daily_kpis, mart_weather_impact, mart_zone_monthly")] },
+  { title: "Quality gate 2: Gold reconciliation", nodes: ["gate2", "meta_dq"], edges: ["dims>gate2", "facts>gate2", "marts>gate2", "gate2>meta_dq"], stack: ["run", "run_checks(GOLD_CHECKS)"], file: "quality.py",
+    why: `<p>Gold's trip count and revenue match Silver <strong>exactly</strong> (difference 0), so no rows were lost or double-counted in aggregation.</p>`,
+    code: INFO.gate2.code,
+    logs: [L("00:45:16", "[dq:gold] trip_count_reconciles            PASS observed=0 expected = 0"), L("00:45:16", "[dq:gold] revenue_reconciles_abs_diff      PASS observed=0 expected < 0.01"), L("00:45:16", "[dq:gold] daily_kpis_no_date_gaps          PASS observed=0 expected = 0"), L("00:45:16", "[dq:gold] weather_joined_all_days          PASS observed=0 expected = 0")] },
+  { title: "Run succeeds and data is ready to serve", nodes: ["meta_runs", "dashboard", "exports"], edges: ["gate2>dashboard", "gate2>exports"], stack: ["tracked_run.__exit__"], file: "metadata.py · dashboard/app.py",
+    why: `<p>The <code>with</code> block exits without an exception, so <code>tracked_run</code> marks the run <code>success</code> and the CLI exits with code 0. The whole run took <strong>about 18 seconds</strong>. The Streamlit dashboard can now read the new Gold tables.</p>`,
+    code: `con.execute("UPDATE meta.pipeline_runs SET finished_at=?, status='success' WHERE run_id=?", ...)`,
+    logs: [L("00:45:16", "Run 2f7e5ac0c879 finished successfully"), { cmd: "$ streamlit run dashboard/app.py" }] },
+];
+
+const RERUN = [
+  { title: "Same command, run a second time", nodes: ["orch", "meta_runs"], stack: ["main", "run", "tracked_run"], file: "pipeline.py",
+    why: `<p>What happens if the scheduler runs the job again, or you rerun it by mistake? A well-built pipeline should produce <strong>exactly the same result</strong>, with no duplicates and no wasted downloads.</p>`,
+    code: `$ lakehouse run --start 2024-01 --end 2024-03`, logs: [{ cmd: "$ lakehouse run --start 2024-01 --end 2024-03" }] },
+  { title: "Bronze skips everything already landed", nodes: ["meta_ingest", "br_trips", "br_weather", "br_zones"], edges: ["br_trips>meta_ingest"], stack: ["run", "bronze._land", "already_ingested → True"], file: "bronze.py · metadata.py",
+    why: `<p><code>already_ingested()</code> finds each (source, month) in the manifest and the file on disk, so <strong>nothing is downloaded</strong>. Pass <code>--force</code> to download again.</p>`,
+    code: `def already_ingested(con, source, partition_key) -> bool:
+    return con.execute(
+        "SELECT 1 FROM meta.ingestion_log WHERE source=? AND partition_key=?",
+        [source, partition_key]).fetchone() is not None`,
+    logs: [L("00:45:29", "[bronze] zones static already ingested - skipping"), L("00:45:29", "[bronze] tlc_yellow 2024-01 already ingested - skipping"), L("00:45:29", "[bronze] weather 2024-01 already ingested - skipping"), L("00:45:29", "[bronze] tlc_yellow 2024-02 already ingested - skipping"), L("00:45:29", "…")] },
+  { title: "Silver overwrites its partitions", nodes: ["sv_trips", "sv_weather", "quarantine"], edges: ["br_trips>sv_trips", "sv_trips>quarantine"], stack: ["run", "silver.build_trips", "COPY … TO year=2024/month=01/trips.parquet"], file: "silver.py",
+    why: `<p>Each month is written to a fixed path, <code>year=YYYY/month=MM/trips.parquet</code>. <code>COPY … TO</code> <em>replaces</em> that file instead of adding to it, so the row count stays at 9,203,917.</p>`,
+    code: `copy_to_parquet(con, "...", settings.silver / "trips" / part / "trips.parquet")`, logs: [L("00:45:31", "[silver] trips 2024-01: {'total': 2964624, 'accepted': 2867215, 'rejected': 97409}")] },
+  { title: "Gold is rebuilt from scratch", nodes: ["gate1", "dims", "facts", "marts"], edges: ["gate1>dims", "gate1>facts", "facts>marts"], stack: ["run", "gold.build", "CREATE OR REPLACE TABLE"], file: "sql/gold/*.sql",
+    why: `<p>Every Gold table uses <code>CREATE OR REPLACE</code> and is rebuilt from Silver. At this size that takes under a second, and Gold can never drift from Silver.</p>`,
+    code: `CREATE OR REPLACE TABLE gold.fct_trips_hourly AS ...`, logs: [L("00:45:33", "[gold] built 7 tables: ...")] },
+  { title: "Same numbers, verified by a test", nodes: ["gate2", "meta_dq", "meta_runs"], edges: ["gate2>meta_dq"], stack: ["tests/test_pipeline.py", "test_rerun_is_idempotent"], file: "tests/test_pipeline.py",
+    why: `<p>The test suite checks this automatically: it runs the pipeline twice and asserts that Gold's trips and revenue are identical. Reconciliation passes again, and a second <code>success</code> row is added to <code>pipeline_runs</code>.</p>`,
+    code: `def test_rerun_is_idempotent(lakehouse):
+    before = con.execute("SELECT sum(trips), sum(revenue) FROM gold.fct_trips_hourly").fetchone()
+    run(settings, [(2024, 1)], stages=("silver", "gold"))
+    after  = ...
+    assert before == after`,
+    logs: [L("00:45:33", "[dq:gold] trip_count_reconciles            PASS observed=0 expected = 0"), L("00:45:33", "Run <run_id> finished successfully")] },
+];
+
+const FAILURE = [
+  { title: "Simulation: a bad file arrives", nodes: ["src_trips", "br_trips"], edges: ["src_trips>br_trips"], stack: ["run", "bronze.ingest_trips"], file: "bronze.py",
+    why: `<p><strong>Simulated scenario.</strong> April's file contains some trips sent twice by the source system. At the same time, a code change has accidentally broken the de-duplication logic in <code>trips.sql</code>. Bronze stores the file exactly as received, as it always does.</p>`,
+    code: `CASE
+    -- WHEN _dup_rank > 1 THEN 'duplicate'   <- line deleted by mistake in a refactor
+    WHEN pickup_at IS NULL OR dropoff_at IS NULL THEN 'missing_timestamp'
+    ...`, logs: [{ cmd: "$ lakehouse run --start 2024-04" }, L("09:00:02", "[bronze] downloading tlc_yellow 2024-04")] },
+  { title: "Silver writes the partition", nodes: ["sv_trips", "quarantine"], edges: ["br_trips>sv_trips", "sv_trips>quarantine"], stack: ["run", "silver.build_trips"], file: "silver.py",
+    why: `<p>The duplicate rows pass every per-row rule, so they land in Silver instead of quarantine. Nothing has been <em>promoted</em> yet: Gold, which dashboards read, is unchanged.</p>`,
+    code: `silver.build_trips(con, settings, 2024, 4)`, logs: [L("09:00:06", "[silver] trips 2024-04: {...}")] },
+  { title: "Quality gate 1 catches it", nodes: ["gate1", "meta_dq"], edges: ["sv_trips>gate1", "gate1>meta_dq"], fail: ["gate1"], failEdges: ["sv_trips>gate1"], stack: ["run", "run_checks(SILVER_CHECKS)", "raise DataQualityError"], file: "quality.py",
+    why: `<p><code>trip_id_unique</code> finds 1,284 repeated IDs. It's <strong>critical</strong>, so after logging and saving every result, <code>run_checks</code> raises <code>DataQualityError</code>.</p>`,
+    code: `critical = [r["check"] for r in results if not r["passed"] and r["severity"] == "critical"]
+if critical:
+    raise DataQualityError(f"Critical data-quality checks failed: {', '.join(critical)}")`,
+    logs: [L("09:00:07", "[dq:silver] trips_not_empty                  PASS observed=3.4e+06 expected > 0"), L("09:00:07", "[dq:silver] trip_id_unique                   FAIL observed=1284 expected = 0", "ERROR"), L("09:00:07", "[dq:silver] reject_rate_pct                  PASS observed=3.9 expected <= 10%")] },
+  { title: "Gold is never touched", nodes: ["dims", "facts", "marts", "dashboard"], fail: [], stack: ["(skipped) gold.build"], file: "pipeline.py",
+    why: `<p>Because the exception was raised before <code>gold.build()</code>, Gold still holds the last good data. Dashboards and reports show slightly old but correct numbers instead of new wrong ones.</p>`,
+    code: `run_checks(con, SILVER_CHECKS, run_id)  # raised here
+# gold.build(con, settings)             # never reached`, logs: [] },
+  { title: "The run is recorded as failed", nodes: ["meta_runs", "orch"], fail: ["meta_runs"], stack: ["tracked_run.__exit__ (exception)", "main → return 1"], file: "metadata.py · __main__.py",
+    why: `<p><code>tracked_run</code> catches the exception, marks the run <code>failed</code> with the message, and re-raises it. <code>main()</code> logs the error and exits with <strong>code 1</strong>. A scheduler such as Airflow or GitHub Actions would mark the job red and alert someone.</p>`,
+    code: `except Exception as exc:
+    con.execute("UPDATE meta.pipeline_runs SET finished_at=?, status='failed', error=? WHERE run_id=?",
+                [now(), str(exc)[:500], run_id])
+    raise`,
+    logs: [L("09:00:07", "Pipeline failed: Critical data-quality checks failed: trip_id_unique", "ERROR"), { cmd: "$ echo $?" }, { raw: "1" }] },
+];
+
+const SCENARIOS = [
+  { id: "normal", label: "First full run", steps: NORMAL },
+  { id: "rerun", label: "Re-run (idempotent)", steps: RERUN },
+  { id: "failure", label: "Critical check fails", steps: FAILURE },
+];
+
+/* ---------- rendering ---------- */
+const svg = document.getElementById("svg");
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+
+function edgePath(a, b) {
+  const A = NODES[a], B = NODES[b];
+  if (B.x >= A.x + A.w - 1) {
+    let ay = A.y + A.h / 2, by = B.y + B.h / 2;
+    if (A.gate) ay = by; if (B.gate) by = ay;
+    const x1 = A.x + A.w, x2 = B.x - 6, mx = (x1 + x2) / 2;
+    return `M${x1},${ay} C${mx},${ay} ${mx},${by} ${x2},${by}`;
+  }
+  const x1 = A.x + A.w / 2, y1 = A.y + A.h;
+  const x2 = Math.min(Math.max(x1, B.x + 24), B.x + B.w - 24), y2 = B.y - 6, my = (y1 + y2) / 2;
+  return `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`;
+}
+
+function buildDiagram() {
+  const defs = el("defs", {}, svg);
+  [["arr", "arrow"], ["arr-on", "arrow-on"], ["arr-bad", "arrow-bad"]].forEach(([id, cls]) => {
+    const m = el("marker", { id, viewBox: "0 0 10 10", refX: "4", refY: "5", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" }, defs);
+    el("path", { d: "M0,0 L10,5 L0,10 z", class: cls }, m);
+  });
+  [["SOURCES", 20, ""], ["BRONZE · RAW", 230, "bronze"], ["SILVER · CLEAN", 440, "silver"], ["GOLD · MODELED", 734, "gold"], ["SERVE", 1010, ""]]
+    .forEach(([t, x, c]) => { const e = el("text", { x, y: 100, class: "colhead " + c }, svg); e.textContent = t; });
+  el("rect", { x: 10, y: 444, width: 1140, height: 112, rx: 10, class: "metaband" }, svg);
+  const ml = el("text", { x: 24, y: 470, class: "metalabel" }, svg); ml.textContent = "META SCHEMA · AUDIT TRAIL WRITTEN BY EVERY STAGE";
+
+  const eg = el("g", {}, svg);
+  EDGES.forEach(id => {
+    const [a, b] = id.split(">");
+    el("path", { d: edgePath(a, b), class: "edge" + (DASHED.has(id) ? " dashed" : ""), "data-id": id, "marker-end": "url(#arr)" }, eg);
+  });
+
+  for (const [id, n] of Object.entries(NODES)) {
+    const g = el("g", { class: "node" + (n.gate ? " gate" : ""), "data-id": id, tabindex: "0", role: "button", "aria-label": "Inspect " + n.title.replace(/\s+/g, " ") }, svg);
+    el("rect", { class: "box", x: n.x, y: n.y, width: n.w, height: n.h, rx: n.gate ? 22 : 8 }, g);
+    if (n.gate) {
+      const cx = n.x + n.w / 2, cy = n.y + n.h / 2;
+      const t = el("text", { class: "gt", x: cx, y: cy, "text-anchor": "middle", "dominant-baseline": "middle", transform: `rotate(-90 ${cx} ${cy})` }, g);
+      t.textContent = n.title;
+    } else if (id === "orch") {
+      const t = el("text", { class: "t", x: n.x + 16, y: n.y + 27 }, g); t.textContent = n.title;
+      const s = el("text", { class: "s", x: n.x + n.w - 16, y: n.y + 27, "text-anchor": "end" }, g); s.textContent = n.sub;
+    } else {
+      el("rect", { class: "tag", x: n.x, y: n.y + 10, width: 3, height: n.h - 20, fill: LAYER_COLOR[n.layer] }, g);
+      const t = el("text", { class: "t", x: n.x + 14, y: n.y + 25 }, g); t.textContent = n.title;
+      const s = el("text", { class: "s", x: n.x + 14, y: n.y + 43 }, g); s.textContent = n.sub;
+    }
+    g.addEventListener("click", () => inspect(id));
+    g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); inspect(id); } });
+  }
+}
+
+let scn = SCENARIOS[0], idx = 0, timer = null, selected = null;
+
+function paint() {
+  const step = scn.steps[idx];
+  const visited = new Set(scn.steps.slice(0, idx).flatMap(s => s.nodes));
+  const active = new Set(step.nodes), failN = new Set(step.fail || []);
+  const actE = new Set(step.edges || []), failE = new Set(step.failEdges || []);
+  svg.querySelectorAll(".node").forEach(g => {
+    const id = g.dataset.id;
+    g.classList.toggle("active", active.has(id) && !failN.has(id));
+    g.classList.toggle("failed", failN.has(id));
+    g.classList.toggle("visited", visited.has(id) && !active.has(id));
+    g.classList.toggle("selected", selected === id);
+  });
+  svg.querySelectorAll(".edge").forEach(p => {
+    const id = p.dataset.id, f = failE.has(id), a = actE.has(id) && !f;
+    p.classList.toggle("active", a); p.classList.toggle("failed", f);
+    p.setAttribute("marker-end", f ? "url(#arr-bad)" : a ? "url(#arr-on)" : "url(#arr)");
+  });
+  document.getElementById("counter").textContent = `Step ${idx + 1} / ${scn.steps.length}`;
+  document.getElementById("barfill").style.width = ((idx + 1) / scn.steps.length * 100) + "%";
+  document.getElementById("prev").disabled = idx === 0;
+  document.getElementById("next").disabled = idx === scn.steps.length - 1;
+  renderLog();
+  if (!selected) renderStep();
+}
+
+function chip(cls, text) { return `<span class="chip ${cls}">${text}</span>`; }
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function renderStep() {
+  const s = scn.steps[idx], p = document.getElementById("panel");
+  const layers = [...new Set(s.nodes.map(n => NODES[n].layer))];
+  const isFail = (s.fail && s.fail.length) || (s.failEdges && s.failEdges.length);
+  p.innerHTML = `
+    <div class="eyebrow">${esc(scn.label)} · step ${idx + 1}</div>
+    <h2>${esc(s.title)}</h2>
+    <div class="chips">${layers.map(l => chip(l, l === "orch" ? "orchestration" : l)).join("")}${isFail ? chip("bad", "failure") : ""}${chip("file", esc(s.file))}</div>
+    <div class="stack" aria-label="Call stack">${s.stack.map((f, i) => (i ? "<span>›</span>" : "") + `<span class="fn">${esc(f)}</span>`).join("")}</div>
+    <div class="why">${s.why}</div>
+    <pre class="code"></pre>`;
+  p.querySelector("pre").textContent = s.code;
+}
+
+function inspect(id) {
+  stop(); selected = id; paint();
+  const n = NODES[id], info = INFO[id], p = document.getElementById("panel");
+  p.innerHTML = `
+    <div class="backrow"><span class="eyebrow">Inspecting component</span><button class="btn" id="back">← Back to step ${idx + 1}</button></div>
+    <h2>${esc(n.title.replace(/\s+/g, " "))}</h2>
+    <div class="chips">${chip(n.layer, n.layer === "orch" ? "orchestration" : n.layer)}${chip("file", esc(info.file))}</div>
+    <div class="why">${info.why}</div>
+    <dl class="kv">${info.kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    <pre class="code"></pre>`;
+  p.querySelector("pre").textContent = info.code;
+  document.getElementById("back").addEventListener("click", () => { selected = null; paint(); });
+}
+
+function renderLog() {
+  const box = document.getElementById("log");
+  document.getElementById("logscn").textContent = scn.label;
+  box.innerHTML = "";
+  scn.steps.slice(0, idx + 1).forEach((s, si) => s.logs.forEach(l => {
+    const ln = document.createElement("span");
+    ln.className = "ln" + (si === idx ? " new" : "");
+    if (l.cmd) { ln.innerHTML = `<span class="cmd">${esc(l.cmd)}</span>`; }
+    else if (l.raw) { ln.textContent = l.raw; }
+    else {
+      const lvl = l.lvl === "ERROR" ? "lv-err" : l.lvl === "WARNING" ? "lv-warn" : "";
+      let msg = esc(l.msg).replace(/ PASS /, ' <span class="pass">PASS</span> ').replace(/ FAIL /, ' <span class="fail">FAIL</span> ');
+      ln.innerHTML = `<span class="ts">${l.t}</span> <span class="${lvl}">${(l.lvl + "   ").slice(0, 7)}</span> ${msg}`;
+    }
+    box.appendChild(ln);
+  }));
+  if (!box.childElementCount) box.innerHTML = `<span class="ln ts">(no output yet)</span>`;
+  box.scrollTop = box.scrollHeight;
+}
+
+function go(i) { idx = Math.max(0, Math.min(scn.steps.length - 1, i)); selected = null; paint(); }
+function stop() { clearInterval(timer); timer = null; document.getElementById("play").textContent = "▶ Play"; }
+function play() {
+  if (timer) return stop();
+  if (idx === scn.steps.length - 1) go(0);
+  document.getElementById("play").textContent = "❚❚ Pause";
+  timer = setInterval(() => { if (idx >= scn.steps.length - 1) return stop(); go(idx + 1); }, 2800);
+}
+
+const seg = document.getElementById("scenarios");
+SCENARIOS.forEach(s => {
+  const b = document.createElement("button");
+  b.id = "scn-" + s.id; b.textContent = s.label; b.setAttribute("aria-pressed", s === scn);
+  b.addEventListener("click", () => { stop(); scn = s; seg.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b)); go(0); });
+  seg.appendChild(b);
+});
+document.getElementById("prev").addEventListener("click", () => { stop(); go(idx - 1); });
+document.getElementById("next").addEventListener("click", () => { stop(); go(idx + 1); });
+document.getElementById("play").addEventListener("click", play);
+document.addEventListener("keydown", e => {
+  if (e.target.closest && e.target.closest(".node, input, textarea")) return;
+  if (e.key === "ArrowRight") { stop(); go(idx + 1); }
+  else if (e.key === "ArrowLeft") { stop(); go(idx - 1); }
+  else if (e.key === " " && e.target === document.body) { e.preventDefault(); play(); }
+});
+
+buildDiagram();
+go(0);
+</script>
